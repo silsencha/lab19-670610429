@@ -88,6 +88,12 @@ export const zEnrollmentBody = z.object({
   courseId: zCourseId,
 });
 
+export const zEnrollmentPutBody = z.object({
+  studentId: z.string(),
+  courseId: z.string(),
+  newCourseId: z.string(),
+});
+
 ////// User Validators //////
 export const zUserBody = z.object({
   username: zFirstName,

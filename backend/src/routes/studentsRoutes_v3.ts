@@ -1,5 +1,9 @@
 import { Router, type Request, type Response } from "express";
-import { zStudentPostBody, zStudentId } from "../libs/zodValidators.js";
+import {
+  zStudentPostBody,
+  zStudentId,
+  zStudentPutBody,
+} from "../libs/zodValidators.js";
 
 import type { Student, CustomRequest } from "../libs/types.js";
 
@@ -10,6 +14,8 @@ import { checkRoles } from "../middlewares/checkRolesDBMiddleware.ts";
 
 // import database
 import { PrismaClient } from "../../generated/prisma/client.ts";
+import { request } from "node:https";
+import { success } from "zod";
 const prisma = new PrismaClient();
 
 const router = Router();
@@ -177,6 +183,148 @@ router.post(
       return res.status(500).json({
         success: false,
         message: "Somthing is wrong, please try again",
+        error: err,
+      });
+    }
+  },
+);
+
+// PUT /api/v3/student
+router.put(
+  "/",
+  authenticateToken,
+  checkRoles,
+  async (req: CustomRequest, res: Response) => {
+    try {
+      // get req input
+      const user = req.user;
+      const body = await req.body;
+
+      // check validation is req is correct
+      const valid = zStudentPutBody.safeParse(body);
+      if (!valid.success) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed",
+          errors: valid.error.issues[0]?.message,
+        });
+      }
+
+      const { studentId, ...updateData } = valid.data;
+
+      // check if student is in db or not
+      const existStudent = await prisma.student.findUnique({
+        where: { studentId },
+      });
+      // if not return not found
+      if (!existStudent) {
+        return res.status(404).json({
+          success: false,
+          message: "Student does not exist",
+        });
+      }
+
+      // check if role is student and can edit only own data
+      if (
+        user?.role === "STUDENT" &&
+        existStudent.studentId !== user.studentId
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden access",
+        });
+      }
+
+      const updatePayload: any = {};
+      if (updateData.firstName !== undefined && updateData.firstName !== null) {
+        updatePayload.firstName = updateData.firstName;
+      }
+      if (updateData.lastName !== undefined && updateData.lastName !== null) {
+        updatePayload.lastName = updateData.lastName;
+      }
+      if (updateData.program !== undefined && updateData.program !== null) {
+        updatePayload.program = updateData.program;
+      }
+      if (updateData.interests !== undefined && updateData.interests !== null) {
+        updatePayload.interests = updateData.interests;
+      }
+      if (updateData.emails !== undefined && updateData.emails !== null) {
+        updatePayload.emails = updateData.emails;
+      }
+
+      // update only recive field data
+      const updatedStudent = await prisma.student.update({
+        where: { studentId },
+        data: updatePayload,
+      });
+
+      // return success
+      return res.status(200).json({
+        success: true,
+        message: "Student updated successfully",
+        data: updatedStudent,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Something is wrong, please try again",
+        error: err,
+      });
+    }
+  },
+);
+
+// DELETE /api/v3/students
+// delete a student and their related enrollments using transaction
+router.delete(
+  "/",
+  authenticateToken,
+  checkRoleAdmin,
+  async (req: Request, res: Response) => {
+    try {
+      const body = await req.body;
+      const { studentId } = body;
+
+      // check valid student
+      if (!studentId) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed: studentId is required",
+        });
+      }
+
+      // check is student exist in db or not
+      const existingStudent = await prisma.student.findUnique({
+        where: { studentId },
+      });
+      // if not return not found
+      if (!existingStudent) {
+        return res.status(404).json({
+          success: false,
+          message: "Student does not exist",
+        });
+      }
+
+      // delete enrollment first then delete student
+      const [deletedEnrollments, deletedStudent] = await prisma.$transaction([
+        prisma.enrollment.deleteMany({
+          where: { studentId },
+        }),
+        prisma.student.delete({
+          where: { studentId },
+        }),
+      ]);
+
+      // return success
+      return res.status(200).json({
+        success: true,
+        message: "Student deleted successfully",
+        data: deletedStudent,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Something is wrong, please try again",
         error: err,
       });
     }

@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { zEnrollmentBody } from "../libs/zodValidators.ts";
+import { zEnrollmentBody, zEnrollmentPutBody } from "../libs/zodValidators.ts";
 
 import type { CustomRequest } from "../libs/types.ts";
 
@@ -127,5 +127,158 @@ router.post(
 //   ยกเลิกการลงทะเบียน (drop)
 //   - ADMIN ลบได้ทุกคน / STUDENT ลบได้แค่ของตัวเอง (403)
 //   - validate body (400), ไม่พบการลงทะเบียน (404)
+
+// PUT /api/v3/enrollments
+router.put(
+  "/",
+  authenticateToken,
+  checkRoles,
+  async (req: CustomRequest, res: Response) => {
+    try {
+      const user = req.user;
+      const body = await req.body;
+
+      const valid = zEnrollmentPutBody.safeParse(body);
+      if (!valid.success) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed",
+          errors: valid.error.issues[0]?.message,
+        });
+      }
+
+      const { studentId, courseId, newCourseId } = valid.data;
+
+      if (user?.role === "STUDENT" && studentId !== user.studentId) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden access",
+        });
+      }
+
+      if (courseId === newCourseId) {
+        return res.status(400).json({
+          success: false,
+          message: "New course cannot be the same as old course",
+        });
+      }
+
+      const existingEnrollment = await prisma.enrollment.findFirst({
+        where: { studentId, courseId },
+      });
+
+      if (!existingEnrollment) {
+        return res.status(404).json({
+          success: false,
+          message: "Original enrollment does not exist",
+        });
+      }
+
+      const newCourse = await prisma.course.findUnique({
+        where: { courseId: newCourseId },
+      });
+
+      if (!newCourse) {
+        return res.status(404).json({
+          success: false,
+          message: "New course does not exist",
+        });
+      }
+
+      const existingNewEnrollment = await prisma.enrollment.findFirst({
+        where: { studentId, courseId: newCourseId },
+      });
+
+      if (existingNewEnrollment) {
+        return res.status(409).json({
+          success: false,
+          message: "Already enrolled in the new course",
+        });
+      }
+
+      const updatedEnrollment = await prisma.$transaction(async (tx) => {
+        await tx.enrollment.deleteMany({
+          where: { studentId, courseId },
+        });
+
+        const newEnrollment = await tx.enrollment.create({
+          data: {
+            studentId,
+            courseId: newCourseId,
+          },
+        });
+
+        return newEnrollment;
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Enrollment updated successfully",
+        data: updatedEnrollment,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Something is wrong, please try again",
+        error: err,
+      });
+    }
+  },
+);
+
+// DELETE /api/v3/enrollments
+router.delete(
+  "/",
+  authenticateToken,
+  checkRoles,
+  async (req: CustomRequest, res: Response) => {
+    try {
+      const user = req.user;
+      const body = await req.body;
+      const { studentId, courseId } = body;
+
+      if (!studentId || !courseId) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed: studentId and courseId are required",
+        });
+      }
+
+      if (user?.role === "STUDENT" && studentId !== user.studentId) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden access",
+        });
+      }
+
+      const existingEnrollment = await prisma.enrollment.findFirst({
+        where: { studentId, courseId },
+      });
+
+      if (!existingEnrollment) {
+        return res.status(404).json({
+          success: false,
+          message: "Enrollment not found",
+        });
+      }
+
+      const deletedEnrollment = await prisma.enrollment.delete({
+        where: { id: existingEnrollment.id },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Enrollment deleted successfully",
+        data: deletedEnrollment,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Something is wrong, please try again",
+        error: err,
+      });
+    }
+  },
+);
 
 export default router;
